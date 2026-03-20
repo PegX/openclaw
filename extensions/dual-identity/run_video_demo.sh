@@ -3,9 +3,14 @@ set -euo pipefail
 
 OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-dual-identity}"
 OPENCLAW_AGENT="${OPENCLAW_AGENT:-main}"
-OPENCLAW_BIN="${OPENCLAW_BIN:-openclaw}"
+OPENCLAW_CLI_MODE="${OPENCLAW_CLI_MODE:-repo}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-}"
 SESSION_PREFIX="${SESSION_PREFIX:-dual-identity-demo}"
 THINKING_MODE="${THINKING_MODE:-off}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+DEFAULT_NODE_BIN="${HOME}/.nvm/versions/node/v22.22.1/bin/node"
+NODE_BIN="${OPENCLAW_NODE_BIN:-${DEFAULT_NODE_BIN}}"
 
 if [[ "${OPENCLAW_PROFILE}" == "default" ]]; then
   PROFILE_HOME="${HOME}/.openclaw"
@@ -20,9 +25,23 @@ SESSION_TWO="dual-identity-demo-2"
 SESSION_ONE="${SESSION_PREFIX}-1"
 SESSION_TWO="${SESSION_PREFIX}-2"
 DEMO_ONE_MESSAGE="${DEMO_ONE_MESSAGE:-Reply with exactly: ok}"
-DEMO_TWO_MESSAGE="${DEMO_TWO_MESSAGE:-Use the sessions_spawn tool exactly once to spawn a subagent that replies with the single word done, then summarize in one sentence that the child run was started.}"
+DEMO_TWO_MESSAGE="${DEMO_TWO_MESSAGE:-Use the sessions_spawn tool exactly once with thread=true and mode=session to spawn a thread-bound subagent that replies with the single word done, then summarize in one sentence that the child run was started.}"
 
-OPENCLAW_CMD=("${OPENCLAW_BIN}" "--profile" "${OPENCLAW_PROFILE}")
+run_openclaw() {
+  local cmd=()
+  if [[ -n "${OPENCLAW_BIN}" ]]; then
+    cmd=("${OPENCLAW_BIN}")
+  elif [[ "${OPENCLAW_CLI_MODE}" == "global" ]]; then
+    cmd=("openclaw")
+  else
+    cmd=("${NODE_BIN}" "${REPO_ROOT}/dist/entry.js")
+  fi
+
+  (
+    cd "${REPO_ROOT}"
+    "${cmd[@]}" --profile "${OPENCLAW_PROFILE}" "$@"
+  )
+}
 
 mkdir -p "${AUDIT_DIR}"
 touch "${AUDIT_FILE}"
@@ -34,7 +53,7 @@ echo "=== 1. Confirm dual-identity profile and plugin ==="
 echo "Profile: ${OPENCLAW_PROFILE}"
 echo "Profile home: ${PROFILE_HOME}"
 echo "Audit file: ${AUDIT_FILE}"
-"${OPENCLAW_CMD[@]}" plugins list | awk '
+run_openclaw plugins list | awk '
   NR <= 12 { print; next }
   /Dual Identity|dual-identity/ { print; capture=4; next }
   capture > 0 { print; capture--; next }
@@ -42,13 +61,13 @@ echo "Audit file: ${AUDIT_FILE}"
 
 echo
 echo "=== 2. Demo 1: minimal delegated run ==="
-if ! "${OPENCLAW_CMD[@]}" agent --local --agent "${OPENCLAW_AGENT}" --session-id "${SESSION_ONE}" --message "${DEMO_ONE_MESSAGE}" --thinking "${THINKING_MODE}" --json; then
+if ! run_openclaw agent --local --agent "${OPENCLAW_AGENT}" --session-id "${SESSION_ONE}" --message "${DEMO_ONE_MESSAGE}" --thinking "${THINKING_MODE}" --json; then
   echo "[dual-identity-demo] Demo 1 exited non-zero; continuing so audit can still be inspected."
 fi
 
 echo
 echo "=== 3. Demo 2: stronger tool/subagent chain ==="
-if ! "${OPENCLAW_CMD[@]}" agent --local --agent "${OPENCLAW_AGENT}" --session-id "${SESSION_TWO}" --message "${DEMO_TWO_MESSAGE}" --thinking "${THINKING_MODE}" --json; then
+if ! run_openclaw agent --local --agent "${OPENCLAW_AGENT}" --session-id "${SESSION_TWO}" --message "${DEMO_TWO_MESSAGE}" --thinking "${THINKING_MODE}" --json; then
   echo "[dual-identity-demo] Demo 2 exited non-zero; continuing so audit can still be inspected."
 fi
 

@@ -89,6 +89,11 @@ def read_audit_lines(path: Path) -> list[str]:
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def resolve_node_bin() -> str:
+    preferred = Path.home() / ".nvm" / "versions" / "node" / "v22.22.1" / "bin" / "node"
+    return str(preferred if preferred.exists() else Path("node"))
+
+
 def summarize_lineage_events(audit_events: list[dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "sink_event_count": 0,
@@ -142,26 +147,33 @@ def run_scenario(
     prompt: str,
     thinking: str,
     profile: str | None,
+    cli_mode: str,
     timeout_seconds: float | None,
 ) -> dict[str, Any]:
-    cmd = [
-        "openclaw",
-    ]
+    if cli_mode == "repo":
+        cmd = [
+            resolve_node_bin(),
+            str(repo / "dist" / "entry.js"),
+        ]
+    else:
+        cmd = ["openclaw"]
     if profile:
         cmd.extend(["--profile", profile])
-    cmd.extend([
-        "agent",
-        "--local",
-        "--agent",
-        "main",
-        "--session-id",
-        session_id,
-        "--thinking",
-        thinking,
-        "--message",
-        prompt,
-        "--json",
-    ])
+    cmd.extend(
+        [
+            "agent",
+            "--local",
+            "--agent",
+            "main",
+            "--session-id",
+            session_id,
+            "--thinking",
+            thinking,
+            "--message",
+            prompt,
+            "--json",
+        ]
+    )
     before_lines = read_audit_lines(audit_file)
     started = time.time()
     timed_out = False
@@ -172,6 +184,7 @@ def run_scenario(
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout_seconds,
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
@@ -185,7 +198,7 @@ def run_scenario(
             stderr=stderr + "\ntrace collection timed out",
         )
     duration_ms = round((time.time() - started) * 1000, 2)
-    stdout = proc.stdout.strip()
+    stdout = (proc.stdout or "").strip()
     payload = {}
     if stdout:
         try:
@@ -208,10 +221,11 @@ def run_scenario(
         "prompt": prompt,
         "thinking": thinking,
         "returncode": proc.returncode,
+        "returncode": proc.returncode,
         "timed_out": timed_out,
         "duration_ms": duration_ms,
         "stdout": payload,
-        "stderr": proc.stderr.strip(),
+        "stderr": (proc.stderr or "").strip(),
         "audit_event_count": len(audit_events),
         "audit_lineage_event_count": lineage_summary["lineage_event_count"],
         "audit_sink_event_count": lineage_summary["sink_event_count"],
@@ -243,6 +257,7 @@ def main() -> None:
     parser.add_argument("--only-kind", action="append", default=[])
     parser.add_argument("--only-scenario", action="append", default=[])
     parser.add_argument("--profile", default="")
+    parser.add_argument("--cli-mode", choices=["repo", "global"], default="repo")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -264,11 +279,12 @@ def main() -> None:
                         scenario,
                         session_id,
                         audit_file,
-                    prompt=prompt,
-                    thinking=args.thinking,
-                    profile=args.profile or None,
-                    timeout_seconds=args.timeout_seconds,
-                )
+                        prompt=prompt,
+                        thinking=args.thinking,
+                        profile=args.profile or None,
+                        cli_mode=args.cli_mode,
+                        timeout_seconds=args.timeout_seconds,
+                    )
                 )
                 if args.pause_seconds > 0:
                     time.sleep(args.pause_seconds)

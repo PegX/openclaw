@@ -13,10 +13,11 @@ import registerDualIdentity from "./index.js";
 function createApi() {
   const hooks = new Map<PluginHookName, Array<PluginHookHandlerMap[PluginHookName]>>();
   const stateDir = `${os.tmpdir()}/openclaw-dual-identity-test-${Math.random().toString(36).slice(2, 10)}`;
-  const api: OpenClawPluginApi = {
+  const api = {
     id: "dual-identity",
     name: "dual-identity",
     source: "test",
+    registrationMode: "full",
     config: {},
     pluginConfig: {
       injectSystemContext: true,
@@ -42,17 +43,23 @@ function createApi() {
     registerCli() {},
     registerService() {},
     registerProvider() {},
+    registerSpeechProvider() {},
+    registerMediaUnderstandingProvider() {},
+    registerImageGenerationProvider() {},
+    registerWebSearchProvider() {},
+    registerInteractiveHandler() {},
+    onConversationBindingResolved() {},
     registerContextEngine() {},
     registerCommand() {},
     resolvePath(input: string) {
       return input;
     },
-    on(hookName, handler) {
+    on<K extends PluginHookName>(hookName: K, handler: PluginHookHandlerMap[K]) {
       const list = hooks.get(hookName) ?? [];
       list.push(handler as PluginHookHandlerMap[PluginHookName]);
       hooks.set(hookName, list);
     },
-  };
+  } as unknown as OpenClawPluginApi;
   registerDualIdentity(api);
   return {
     api,
@@ -70,10 +77,11 @@ function createApi() {
 function createApiWithConfig(pluginConfig: Record<string, unknown>) {
   const hooks = new Map<PluginHookName, Array<PluginHookHandlerMap[PluginHookName]>>();
   const stateDir = `${os.tmpdir()}/openclaw-dual-identity-test-${Math.random().toString(36).slice(2, 10)}`;
-  const api: OpenClawPluginApi = {
+  const api = {
     id: "dual-identity",
     name: "dual-identity",
     source: "test",
+    registrationMode: "full",
     config: {},
     pluginConfig,
     runtime: createPluginRuntimeMock({
@@ -95,17 +103,23 @@ function createApiWithConfig(pluginConfig: Record<string, unknown>) {
     registerCli() {},
     registerService() {},
     registerProvider() {},
+    registerSpeechProvider() {},
+    registerMediaUnderstandingProvider() {},
+    registerImageGenerationProvider() {},
+    registerWebSearchProvider() {},
+    registerInteractiveHandler() {},
+    onConversationBindingResolved() {},
     registerContextEngine() {},
     registerCommand() {},
     resolvePath(input: string) {
       return input;
     },
-    on(hookName, handler) {
+    on<K extends PluginHookName>(hookName: K, handler: PluginHookHandlerMap[K]) {
       const list = hooks.get(hookName) ?? [];
       list.push(handler as PluginHookHandlerMap[PluginHookName]);
       hooks.set(hookName, list);
     },
-  };
+  } as unknown as OpenClawPluginApi;
   registerDualIdentity(api);
   return {
     stateDir,
