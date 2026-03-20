@@ -1,4 +1,4 @@
-# Dual Identity 视频讲稿（中文，约 3 分钟）
+# Dual Identity 视频讲稿（中文，约 3 分钟，最新版）
 
 ## 开场（0:00 - 0:25）
 
@@ -28,11 +28,11 @@
 
 这说明双身份能力已经进入了 OpenClaw 的运行时，而不是停留在纸面设计。
 
-## Demo 1：最小 delegated run（1:15 - 1:55）
+## Demo 1：轻量 profile 下的最小 delegated run（1:15 - 1:55）
 
 接下来我跑一个最小的本地 agent turn。
 
-这个场景里，用户发出一个简单请求，agent 代表用户执行。
+这里我用的是一个专门的数据采样 profile，名字叫 `dual-identity`。它走的是轻量本地模型，不依赖 OpenClaw core 修改，主要用于稳定地产生双身份和 lineage audit。
 
 这里重点不是回复内容本身，而是看运行时 audit 里记录下来的身份关系。
 
@@ -51,27 +51,38 @@
 
 在这个例子里，`triggerKind` 是 `human_direct`，说明这次 delegated run 是由人直接触发的。
 
-## Demo 2：更强的链路场景（1:55 - 2:40）
+## Demo 2：memory 到 sink 的真实 lineage（1:55 - 2:45）
 
 第二个场景更重要。
 
-这里我让 agent 去尝试调用 `sessions_spawn`，也就是启动一个 child run。即使当前本机 gateway 配置没有让这次 handoff 完整成功，dual-identity 插件依然把关键链路记了下来。
+这里我不只看一个最小对话，而是跑一组更强的 selective traces。比如：
 
-现在在 audit 里可以看到：
+- `memory_search -> outbound`
+- `memory_get -> persistence`
+- `memory_get -> cross-agent`
 
-- `agent_tool_call`
-- `tool_result_observed`
-- `tool_result_persisted`
+这些场景的目的，是看系统能不能把：
 
-而且这些事件的 `triggerKind` 已经不再只是 `human_direct`，而是进入了 `tool_derived`。
+- 哪次 memory read
+- 最终流向了哪个 sink
+- 以及这个 sink 是 outbound、persistence 还是 cross-agent
 
-这说明系统不只是知道“这件事是 agent 做的”，还知道：
+完整串起来。
 
-**这是一个 agent 发起的工具链动作，并且后续状态是由工具结果派生出来的。**
+现在在 audit 里，我们除了看到 `agent_tool_call`、`tool_result_observed`、`tool_result_persisted` 这些事件，还能看到更细的 lineage 字段，比如：
 
-这一步非常关键，因为后面无论是 memory replay 还是 subagent handoff，都是沿着这种 trigger provenance 往下走的。
+- `lineageSourceEventIds`
+- `lineageSourceQueries`
+- `lineageSourcePaths`
+- `sinkKind`
 
-## 总结（2:40 - 3:05）
+这说明系统不只知道“是 agent 做了这件事”，还知道：
+
+**是哪次 memory_search 或 memory_get，最终推动了哪个 outbound、persistence 或 cross-agent sink。**
+
+而这些 JSONL audit 之后还能直接导出成 execution graph，用来做后续的 LLM 或 GNN attribution baseline。
+
+## 总结（2:45 - 3:10）
 
 所以双身份的价值，不是多记两个 ID。
 
@@ -86,5 +97,7 @@
 - memory replay attribution
 - subagent handoff lineage
 - delegated audit and accountability
+- execution-graph attribution dataset
+- 后续的 `LLM + GNN` 研究基线
 
 也就是说，在 OpenClaw 里，双身份不是一个装饰性的概念，而是把 human authority 和 agent execution 分开的运行时基础设施。
