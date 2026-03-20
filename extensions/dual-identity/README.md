@@ -89,7 +89,21 @@ To generate more real runtime samples around `memory_search/get -> sink` chains:
 ```bash
 python3 ./extensions/dual-identity/generate_memory_lineage_traces.py \
   --repo /Users/xupeng/Projects/ai-agent/xclaw/clawGuard/openclaw \
-  --repetitions 2
+  --profile dual-identity \
+  --repetitions 2 \
+  --thinking off \
+  --pause-seconds 1
+```
+
+The trace generator supports selective sampling, so you can thicken only the
+most valuable live paths:
+
+```bash
+python3 ./extensions/dual-identity/generate_memory_lineage_traces.py \
+  --repo /Users/xupeng/Projects/ai-agent/xclaw/clawGuard/openclaw \
+  --profile dual-identity \
+  --only-kind memory_search_to_persistence \
+  --only-kind memory_get_to_cross_agent
 ```
 
 And to train the first actual learning baselines on the exported graph dataset:
