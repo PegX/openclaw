@@ -251,6 +251,38 @@ python3 ./extensions/dual-identity/generate_memory_lineage_traces.py \
 - `memory_search/get -> persistence`
 - `memory_get -> cross-agent`
 
+## 录屏专用 demo
+
+如果要做展示或录屏，建议直接使用：
+
+```bash
+bash ./extensions/dual-identity/run_video_demo.sh
+```
+
+这版脚本已经按“录屏优先”做了几处收口：
+
+- 默认走专用的 `dual-identity` OpenClaw profile
+- 默认读取 profile 本地 audit：
+  - `~/.openclaw-dual-identity/plugins/dual-identity/audit-YYYY-MM-DD.jsonl`
+- `plugins list` 阶段只重点展示 `dual-identity`
+- 两段 demo 都默认使用 `--thinking off`
+- 即使某一段 demo 非零退出，脚本也会继续打印新增 audit，不会整段中断
+
+这让它更适合录：
+
+- 一个最小 delegated run
+- 一个更强的 tool / cross-agent 场景
+- 最终落下来的双身份 audit
+
+如果你需要覆盖默认值，也可以这样运行：
+
+```bash
+OPENCLAW_PROFILE=dual-identity \
+OPENCLAW_AGENT=main \
+THINKING_MODE=off \
+bash ./extensions/dual-identity/run_video_demo.sh
+```
+
 ## 启用方式
 
 可以直接从当前 checkout 安装：

@@ -255,6 +255,38 @@ These scenarios are the fastest way to thicken:
 
 and produce more real `memory_lineage` edges in the exported graph.
 
+## Recording-friendly demo
+
+For a lightweight recording/demo flow, use:
+
+```bash
+bash ./extensions/dual-identity/run_video_demo.sh
+```
+
+The script is now tuned for demo stability:
+
+- it defaults to the dedicated `dual-identity` OpenClaw profile
+- it reads audit output from the profile-local path:
+  - `~/.openclaw-dual-identity/plugins/dual-identity/audit-YYYY-MM-DD.jsonl`
+- it highlights the `dual-identity` plugin in `plugins list`
+- it runs both demo turns with `--thinking off`
+- it continues to print new audit events even if a demo run exits non-zero
+
+This makes it much easier to record:
+
+- a minimal delegated run
+- a stronger cross-agent/tool-chain prompt
+- the resulting dual-identity audit lines
+
+You can override the defaults with environment variables when needed:
+
+```bash
+OPENCLAW_PROFILE=dual-identity \
+OPENCLAW_AGENT=main \
+THINKING_MODE=off \
+bash ./extensions/dual-identity/run_video_demo.sh
+```
+
 ## What it injects
 
 When `injectSystemContext` is enabled, the plugin prepends a compact security
