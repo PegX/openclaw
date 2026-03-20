@@ -4,6 +4,12 @@
   "private": true,
   "description": "OpenClaw dual-identity plugin for distinguishing human authority owners from delegated agent principals.",
   "type": "module",
+  "scripts": {
+    "export-graph": "node ./export_execution_graph.mjs",
+    "generate-traces": "python3 ./generate_memory_lineage_traces.py",
+    "run-baselines": "node ./run_attribution_baselines.mjs",
+    "train-models": "python3 ./train_attribution_models.py"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

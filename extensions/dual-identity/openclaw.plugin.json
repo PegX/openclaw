@@ -17,6 +17,15 @@
       },
       "includeToolDerivedEvents": {
         "type": "boolean"
+      },
+      "enforceStatefulChecks": {
+        "type": "boolean"
+      },
+      "defaultAuthorityOwnerId": {
+        "type": "string"
+      },
+      "defaultAuthorityOwnerLabel": {
+        "type": "string"
       }
     }
   },
@@ -36,6 +45,18 @@
     "includeToolDerivedEvents": {
       "label": "Include Tool-Derived Events",
       "help": "Record tool-result observation and persistence events in the dual-identity audit log."
+    },
+    "enforceStatefulChecks": {
+      "label": "Enforce Stateful Checks",
+      "help": "Block memory-derived outbound/mutation flows, unauthorized persistence cues, and cross-agent delegation that violate the current task contract."
+    },
+    "defaultAuthorityOwnerId": {
+      "label": "Default Authority Owner ID",
+      "help": "Optional fallback human authority-owner id for local or CLI sessions without inbound channel identity."
+    },
+    "defaultAuthorityOwnerLabel": {
+      "label": "Default Authority Owner Label",
+      "help": "Optional fallback human label for local or CLI sessions without inbound channel identity."
     }
   }
 }
