@@ -6,6 +6,17 @@
 - the **agent acting principal** that executes delegated steps
 - the **trigger source** that caused a run or action (`human_direct`, `memory_replay`, `handoff_delegated`, and related machine-side sources)
 
+At its core, `dual-identity` is a **deterministic runtime attribution system**.
+Identity attribution is established from:
+
+- typed OpenClaw hooks
+- session and run context
+- sender/channel metadata
+- tool-call and tool-result events
+- lineage propagation across memory and subagent boundaries
+
+It is **not** primarily a model-driven identity classifier.
+
 It does not modify OpenClaw core. Instead, it uses typed plugin hooks to attach
 dual-identity semantics to:
 
@@ -35,6 +46,35 @@ The current plugin now supports two practical modes:
 - a live OpenClaw runtime/security plugin
 - a provenance-rich trace source for offline `LLM` and `GNN` attribution work
 
+## Architecture layering
+
+We intentionally treat the implementation as a layered system:
+
+### 1. Runtime enforcement path (primary)
+
+This is the main dual-identity mechanism.
+
+- `index.ts`
+- deterministic identity attribution
+- hook-based lineage propagation
+- stateful task-contract checks
+- runtime decisions over outbound, persistence, and cross-agent sinks
+
+This layer is the security boundary. It is the part that decides, records, and
+enforces who owns authority, who acts, and what trigger lineage caused a step.
+
+### 2. Offline analytics path (secondary)
+
+This is an analysis and research layer built on top of the runtime audit.
+
+- `export_execution_graph.mjs`
+- `run_attribution_baselines.mjs`
+- `train_attribution_models.py`
+
+These tools consume the runtime audit after the fact. They help analyze
+execution traces, prototype attribution models, and explore `LLM`/`GNN`
+experiments. They do **not** replace runtime enforcement.
+
 ## What it records
 
 The plugin writes JSONL audit events under:
@@ -63,7 +103,12 @@ Each audit line records:
 - `lineageSourceEventIds` / `lineageSourceQueries` / `lineageSourcePaths`
 - `sinkKind`
 
-These fields are also the plugin's **learning-friendly export layer**.
+These fields are also the plugin's **learning-friendly export layer**. The
+important ordering is:
+
+1. the runtime plugin first records deterministic attribution and lineage
+2. the graph/export layer turns that audit into an offline dataset
+3. attribution baselines consume the dataset as downstream analytics
 
 ## Execution-graph export and attribution baselines
 
@@ -80,6 +125,10 @@ The exporter emits a JSON bundle with:
 - causal, handoff, and `memory_lineage` edges
 - attribution samples labeled by `triggerKind`
 
+This exported graph should be read as a ground-truth-like artifact derived from
+the runtime plugin's deterministic audit, not as a substitute for the runtime
+itself.
+
 You can then run the first offline attribution baselines on top of that dataset:
 
 ```bash
@@ -89,7 +138,7 @@ node ./extensions/dual-identity/run_attribution_baselines.mjs \
 
 The current baseline layer is intentionally small:
 
-- `rules_only`: graph- and lineage-aware heuristic attribution
+- `rules_only`: graph- and lineage-aware heuristic attribution over exported traces
 - `text_only_semantic_proxy`: text-only attribution over event/task summaries
 - `gnn_ready_split`: a deterministic train/val/test split summary for later graph models
 
@@ -104,6 +153,10 @@ The training script currently exposes two stronger baselines:
 
 - `text_encoder_mlp`: a learned embedding-bag text encoder with a small MLP head
 - `small_graph_gcn`: a learned text encoder plus a small graph convolution network over the exported execution graph
+
+These are research-side models. They help us study whether attribution can be
+refined further from the runtime-generated graph; they do not decide the live
+OpenClaw identity boundary.
 
 ## Lightweight sampling profile
 

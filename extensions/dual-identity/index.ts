@@ -18,6 +18,13 @@ import type {
   PluginHookToolResultPersistEvent,
 } from "openclaw/plugin-sdk/core";
 
+// Runtime-first design:
+// This plugin establishes dual identity with deterministic runtime signals,
+// not with model inference. The primary mechanism is hook-based attribution
+// plus lineage propagation across session, tool, memory, and subagent
+// boundaries. Any downstream graph or learning model built on top of this
+// audit is secondary analytics, not the source of truth for enforcement.
+
 type DualIdentityPluginConfig = {
   auditDir?: string;
   injectSystemContext?: boolean;

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# Offline research layer:
+# This training script learns attribution models over graphs exported from the
+# dual-identity runtime audit. The runtime plugin remains the primary
+# rule-based enforcement mechanism; this script explores whether attribution can
+# be refined further from the recorded graph structure and text features.
+
 from __future__ import annotations
 
 import argparse

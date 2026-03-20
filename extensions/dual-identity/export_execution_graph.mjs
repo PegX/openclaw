@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// Offline analytics layer:
+// This script exports a graph dataset from the runtime plugin's deterministic
+// JSONL audit. It is intentionally downstream of runtime enforcement and should
+// be read as a graph view over recorded lineage, not as a replacement for the
+// live dual-identity mechanism.
+
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

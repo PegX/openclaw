@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// Offline analytics layer:
+// These attribution baselines consume the exported execution graph after the
+// runtime plugin has already recorded deterministic identity and lineage.
+// They are useful for analysis and research, but they do not drive live
+// OpenClaw enforcement decisions.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 
