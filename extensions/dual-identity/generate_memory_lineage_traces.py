@@ -70,8 +70,8 @@ SCENARIOS = [
     Scenario(
         "memory-get-handoff",
         (
-            "Use memory_get exactly once with path 'MEMORY.md'. Then spawn a subagent exactly once to continue the task. If a guard blocks that step, still reply with exactly: ok.",
-            "Call memory_get once for 'MEMORY.md'. Then actually invoke a subagent one time to continue the task. If a guard blocks that step, still reply with exactly: ok.",
+            "Do not call memory_search, sessions_send, or session_status. Call memory_get exactly once with {path: 'MEMORY.md'}. Then call sessions_spawn exactly once with {task: 'Summarize the recalled note in five words', agentId: 'main'}. The sessions_spawn tool requires the field task. Do not send action or target fields. If the spawn is blocked, still reply with exactly: ok.",
+            "Only two tools are allowed here: first memory_get with path 'MEMORY.md', then sessions_spawn with task 'Summarize the recalled note in five words' and agentId 'main'. For sessions_spawn, task is required and action/target are invalid. Do not substitute other tools. If blocked, still reply with exactly: ok.",
         ),
         "memory_get_to_cross_agent",
     ),
@@ -95,21 +95,42 @@ def summarize_lineage_events(audit_events: list[dict[str, Any]]) -> dict[str, An
         "lineage_event_count": 0,
         "sink_kinds": [],
         "tool_names": [],
+        "trigger_kinds": [],
+        "attribution_kinds": [],
     }
     sink_kinds: list[str] = []
     tool_names: list[str] = []
+    trigger_kinds: list[str] = []
+    attribution_kinds: list[str] = []
     for event in audit_events:
         if event.get("sinkKind"):
             sink_kinds.append(str(event["sinkKind"]))
         if event.get("toolName"):
             tool_names.append(str(event["toolName"]))
+        if event.get("triggerKind"):
+            trigger_kinds.append(str(event["triggerKind"]))
+        if event.get("attributionKind"):
+            attribution_kinds.append(str(event["attributionKind"]))
         if event.get("lineageSourceEventIds") or event.get("sinkKind"):
             summary["lineage_event_count"] += 1
         if event.get("sinkKind"):
             summary["sink_event_count"] += 1
     summary["sink_kinds"] = sorted(set(sink_kinds))
     summary["tool_names"] = sorted(set(tool_names))
+    summary["trigger_kinds"] = sorted(set(trigger_kinds))
+    summary["attribution_kinds"] = sorted(set(attribution_kinds))
     return summary
+
+
+def scenario_satisfied(scenario: Scenario, result: dict[str, Any]) -> bool:
+    tools = set(result.get("audit_tool_names") or [])
+    sinks = set(result.get("audit_sink_kinds") or [])
+    attrs = set(result.get("audit_attribution_kinds") or [])
+    if scenario.expected_kind == "memory_get_to_cross_agent":
+        return "memory_get" in tools and "sessions_spawn" in tools and (
+            "cross_agent" in sinks or "cross_agent_derived" in attrs
+        )
+    return True
 
 
 def run_scenario(
@@ -121,6 +142,7 @@ def run_scenario(
     prompt: str,
     thinking: str,
     profile: str | None,
+    timeout_seconds: float | None,
 ) -> dict[str, Any]:
     cmd = [
         "openclaw",
@@ -142,13 +164,26 @@ def run_scenario(
     ])
     before_lines = read_audit_lines(audit_file)
     started = time.time()
-    proc = subprocess.run(
-        cmd,
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        proc = subprocess.CompletedProcess(
+            exc.cmd,
+            returncode=124,
+            stdout=stdout,
+            stderr=stderr + "\ntrace collection timed out",
+        )
     duration_ms = round((time.time() - started) * 1000, 2)
     stdout = proc.stdout.strip()
     payload = {}
@@ -173,6 +208,7 @@ def run_scenario(
         "prompt": prompt,
         "thinking": thinking,
         "returncode": proc.returncode,
+        "timed_out": timed_out,
         "duration_ms": duration_ms,
         "stdout": payload,
         "stderr": proc.stderr.strip(),
@@ -181,6 +217,16 @@ def run_scenario(
         "audit_sink_event_count": lineage_summary["sink_event_count"],
         "audit_sink_kinds": lineage_summary["sink_kinds"],
         "audit_tool_names": lineage_summary["tool_names"],
+        "audit_trigger_kinds": lineage_summary["trigger_kinds"],
+        "audit_attribution_kinds": lineage_summary["attribution_kinds"],
+        "scenario_satisfied": scenario_satisfied(
+            scenario,
+            {
+                "audit_tool_names": lineage_summary["tool_names"],
+                "audit_sink_kinds": lineage_summary["sink_kinds"],
+                "audit_attribution_kinds": lineage_summary["attribution_kinds"],
+            },
+        ),
         "audit_events": audit_events,
     }
 
@@ -193,6 +239,7 @@ def main() -> None:
     parser.add_argument("--audit-file", default="")
     parser.add_argument("--thinking", default="off")
     parser.add_argument("--pause-seconds", type=float, default=0.0)
+    parser.add_argument("--timeout-seconds", type=float, default=30.0)
     parser.add_argument("--only-kind", action="append", default=[])
     parser.add_argument("--only-scenario", action="append", default=[])
     parser.add_argument("--profile", default="")
@@ -217,10 +264,11 @@ def main() -> None:
                         scenario,
                         session_id,
                         audit_file,
-                        prompt=prompt,
-                        thinking=args.thinking,
-                        profile=args.profile or None,
-                    )
+                    prompt=prompt,
+                    thinking=args.thinking,
+                    profile=args.profile or None,
+                    timeout_seconds=args.timeout_seconds,
+                )
                 )
                 if args.pause_seconds > 0:
                     time.sleep(args.pause_seconds)

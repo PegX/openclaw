@@ -94,6 +94,7 @@ Each audit line records:
 - `authorityOwnerId` / `authorityOwnerLabel`
 - `actingPrincipalId`
 - `triggerKind`
+- `attributionKind`
 - `delegationId`
 - `sessionKey` / `childSessionKey`
 - `toolName` / `toolCallId` when relevant
@@ -109,6 +110,14 @@ important ordering is:
 1. the runtime plugin first records deterministic attribution and lineage
 2. the graph/export layer turns that audit into an offline dataset
 3. attribution baselines consume the dataset as downstream analytics
+
+`triggerKind` captures the immediate runtime trigger. `attributionKind` captures
+the stronger runtime lineage interpretation that downstream analysis should
+prefer, for example:
+
+- `memory_replay`
+- `handoff_delegated`
+- `cross_agent_derived`
 
 ## Execution-graph export and attribution baselines
 

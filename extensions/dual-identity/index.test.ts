@@ -164,6 +164,7 @@ describe("dual-identity plugin", () => {
     expect(result?.prependSystemContext).toContain("Authority owner (human): Alice");
     expect(result?.prependSystemContext).toContain("Acting principal (agent): main");
     expect(result?.prependSystemContext).toContain("Current trigger source: human_direct");
+    expect(result?.prependSystemContext).toContain("Current attribution lineage: human_direct");
   });
 
   it("propagates authority lineage into subagent handoffs", async () => {
@@ -228,6 +229,9 @@ describe("dual-identity plugin", () => {
     expect(result?.prependSystemContext).toContain("Authority owner (human): Riley");
     expect(result?.prependSystemContext).toContain("Acting principal (agent): worker");
     expect(result?.prependSystemContext).toContain("Current trigger source: handoff_delegated");
+    expect(result?.prependSystemContext).toContain(
+      "Current attribution lineage: cross_agent_derived",
+    );
   });
 
   it("uses configured fallback authority owner for local sessions", async () => {
@@ -379,6 +383,40 @@ describe("dual-identity plugin", () => {
     );
 
     expect(decision?.block).toBe(true);
+  });
+
+  it("surfaces memory_replay as the attribution lineage for memory-triggered runs", async () => {
+    const { getHook } = createApi();
+    const onSessionStart = getHook("session_start");
+    const onBeforePromptBuild = getHook("before_prompt_build");
+
+    await onSessionStart(
+      {
+        sessionId: "sess-memory-lineage",
+        sessionKey: "agent:main:local:memory-lineage",
+      },
+      {
+        sessionId: "sess-memory-lineage",
+        sessionKey: "agent:main:local:memory-lineage",
+        agentId: "main",
+      },
+    );
+
+    const result = await onBeforePromptBuild(
+      {
+        prompt: "Inspect the recalled context and answer the current task only.",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        sessionId: "sess-memory-lineage",
+        sessionKey: "agent:main:local:memory-lineage",
+        trigger: "memory",
+      },
+    );
+
+    expect(result?.prependSystemContext).toContain("Current trigger source: memory_replay");
+    expect(result?.prependSystemContext).toContain("Current attribution lineage: memory_replay");
   });
 
   it("blocks memory-influenced subagent spawning without explicit delegation intent", async () => {

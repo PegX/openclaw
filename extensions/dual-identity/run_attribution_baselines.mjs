@@ -31,7 +31,7 @@ function keywordScore(text, patterns) {
 function rulesOnlyPredict(sample) {
   const node = sample.node;
   if (node.type?.includes("handoff") || node.sinkKind === "cross_agent") {
-    return "handoff_delegated";
+    return "cross_agent_derived";
   }
   if (
     (node.lineageSourceEventIds ?? []).length > 0 ||
@@ -50,11 +50,16 @@ function rulesOnlyPredict(sample) {
 
 function textOnlyPredict(sample) {
   const text = `${sample.text ?? ""} ${sample.node.taskSummary ?? ""}`.toLowerCase();
-  const handoff = keywordScore(text, [/\bhandoff\b/, /\bsubagent\b/, /\bcross-agent\b/]);
+  const handoff = keywordScore(text, [
+    /\bhandoff\b/,
+    /\bsubagent\b/,
+    /\bcross-agent\b/,
+    /\bcross_agent_derived\b/,
+  ]);
   const memory = keywordScore(text, [/\bmemory\b/, /\brecall/, /\bpersist/, /\bquery=/]);
   const tool = keywordScore(text, [/\btool\b/, /\bresult\b/, /\btool_derived\b/]);
   if (handoff >= 1) {
-    return "handoff_delegated";
+    return "cross_agent_derived";
   }
   if (memory >= 1) {
     return "memory_replay";
@@ -135,6 +140,7 @@ async function main() {
       sampleCount: samples.length,
       edgeCount: dataset.metadata?.edgeCount ?? 0,
       nodeCount: dataset.metadata?.nodeCount ?? 0,
+      attributionLabelCounts: dataset.attributionLabelCounts ?? {},
     },
     baselines: {
       rules_only: rulesOnly,

@@ -35,6 +35,7 @@ function summarizeEvent(event) {
     `authority=${event.authorityOwnerId ?? "unknown"}`,
     `acting=${event.actingPrincipalId ?? "unknown"}`,
     `trigger=${event.triggerKind ?? "unknown"}`,
+    `attribution=${event.attributionKind ?? event.triggerKind ?? "unknown"}`,
     event.toolName ? `tool=${event.toolName}` : "",
     event.taskSummary ? `task=${event.taskSummary}` : "",
     event.note ? `note=${event.note}` : "",
@@ -177,6 +178,7 @@ async function main() {
     authorityOwnerId: event.authorityOwnerId ?? null,
     actingPrincipalId: event.actingPrincipalId ?? null,
     triggerKind: event.triggerKind ?? null,
+    attributionKind: event.attributionKind ?? event.triggerKind ?? null,
     toolName: event.toolName ?? null,
     taskContractId: event.taskContractId ?? null,
     taskSummary: event.taskSummary ?? null,
@@ -222,12 +224,21 @@ async function main() {
 
   const attributionSamples = eventsWithIds.map((event) => ({
     eventId: event.eventId,
-    label: event.triggerKind ?? "unknown",
+    label: event.attributionKind ?? event.triggerKind ?? "unknown",
     text: summarizeEvent(event),
     sessionKey: event.sessionKey ?? null,
     propertyTags: event.propertyTags ?? [],
     lineageSourceEventIds: event.lineageSourceEventIds ?? [],
   }));
+
+  const edgeTypeCounts = edges.reduce((acc, edge) => {
+    acc[edge.type] = (acc[edge.type] ?? 0) + 1;
+    return acc;
+  }, {});
+  const attributionLabelCounts = attributionSamples.reduce((acc, sample) => {
+    acc[sample.label] = (acc[sample.label] ?? 0) + 1;
+    return acc;
+  }, {});
 
   await fs.writeFile(
     outputPath,
@@ -240,6 +251,8 @@ async function main() {
           edgeCount: edges.length,
           sampleCount: attributionSamples.length,
         },
+        edgeTypeCounts,
+        attributionLabelCounts,
         nodes,
         edges,
         attributionSamples,

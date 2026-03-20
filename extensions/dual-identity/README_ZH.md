@@ -109,6 +109,7 @@
 - `authorityOwnerId` / `authorityOwnerLabel`
 - `actingPrincipalId`
 - `triggerKind`
+- `attributionKind`
 - `delegationId`
 - `taskContractId` / `taskSummary`
 - `expectedArtifactKinds`
@@ -127,6 +128,17 @@
 1. 运行时插件先产生确定性的身份归因和 lineage audit
 2. 再把 audit 导出成 execution graph
 3. 最后在图上跑 baseline 或学习模型
+
+这里可以进一步区分：
+
+- `triggerKind`：当前这一步在运行时是被什么直接触发的
+- `attributionKind`：系统基于 lineage 给出的更强归因解释
+
+例如：
+
+- `memory_replay`
+- `handoff_delegated`
+- `cross_agent_derived`
 
 ## 图数据与 attribution 基线
 

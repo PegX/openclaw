@@ -42,6 +42,7 @@ type TriggerKind =
   | "memory_replay"
   | "tool_derived"
   | "handoff_delegated"
+  | "cross_agent_derived"
   | "scheduled"
   | "unknown";
 
@@ -154,6 +155,7 @@ type DualIdentityAuditEvent = {
   parentEventId?: string;
   subjectKind: ActingSubjectKind;
   triggerKind: TriggerKind;
+  attributionKind?: TriggerKind;
   authorityOwnerId: string;
   authorityOwnerLabel: string;
   actingPrincipalId: string;
@@ -510,6 +512,51 @@ function lineageFlags(state: SessionIdentityState): string[] {
   ]);
 }
 
+function hasMemoryLineage(state: SessionIdentityState): boolean {
+  return (
+    state.memoryLineage.recentMemoryReads.length > 0 ||
+    state.memoryLineage.sourceKinds.includes("memory_replay") ||
+    state.lastTriggerKind === "memory_replay"
+  );
+}
+
+function attributionPropertyTag(kind: TriggerKind): string {
+  return `attribution:${kind}`;
+}
+
+function deriveAttributionKind(
+  state: SessionIdentityState,
+  params?: {
+    sinkKind?: "outbound" | "mutation" | "persistence" | "cross_agent";
+    eventKind?: DualIdentityAuditEvent["eventKind"];
+  },
+): TriggerKind {
+  if (
+    params?.sinkKind === "cross_agent" ||
+    (state.parentSessionKey && state.lastTriggerKind === "handoff_delegated")
+  ) {
+    return "cross_agent_derived";
+  }
+  if (
+    hasMemoryLineage(state) &&
+    params?.sinkKind &&
+    ["outbound", "mutation", "persistence", "cross_agent"].includes(params.sinkKind)
+  ) {
+    return "memory_replay";
+  }
+  if (state.lastTriggerKind === "handoff_delegated") {
+    return "handoff_delegated";
+  }
+  if (
+    state.memoryLineage.sourceKinds.includes("tool_derived") ||
+    state.lastTriggerKind === "tool_derived" ||
+    ["tool_result_observed", "tool_result_persisted"].includes(String(params?.eventKind))
+  ) {
+    return "tool_derived";
+  }
+  return state.lastTriggerKind || "unknown";
+}
+
 function buildModelFeatures(state: SessionIdentityState, extra?: Record<string, unknown>) {
   return {
     explicitOutboundCommunication: state.taskContract.explicitOutboundCommunication,
@@ -528,6 +575,7 @@ function buildModelFeatures(state: SessionIdentityState, extra?: Record<string, 
     recentMemoryPaths: uniqueStrings(
       state.memoryLineage.recentMemoryReads.map((item) => item.path),
     ),
+    attributionKind: deriveAttributionKind(state),
     ...extra,
   };
 }
@@ -586,12 +634,14 @@ function recordMemorySink(
 }
 
 function renderDualIdentityContext(state: SessionIdentityState, triggerKind: TriggerKind): string {
+  const attributionKind = deriveAttributionKind(state);
   return [
     "[Dual Identity Security Context]",
     `Authority owner (human): ${state.authorityOwner.authorityOwnerLabel} [${state.authorityOwner.authorityOwnerId}]`,
     `Acting principal (agent): ${state.agentId} [${state.agentPrincipalId}]`,
     `Delegation id: ${state.delegationId}`,
     `Current trigger source: ${triggerKind}`,
+    `Current attribution lineage: ${attributionKind}`,
     `Task contract: ${state.taskContract.taskSummary}`,
     `Expected artifacts: ${state.taskContract.expectedArtifactKinds.join(", ") || "reply"}`,
     `Forbidden flows: ${state.taskContract.forbiddenInformationFlows.join(", ") || "none"}`,
@@ -699,10 +749,17 @@ function emitSessionAuditEvent(
     >,
 ): DualIdentityAuditEvent {
   const eventId = nextAuditEventId(state);
+  const attributionKind =
+    params.attributionKind ??
+    deriveAttributionKind(state, {
+      sinkKind: params.sinkKind,
+      eventKind: params.eventKind,
+    });
   const payload = buildAuditEvent({
     ...params,
     eventId,
     parentEventId: params.parentEventId ?? state.lastAuditEventId,
+    attributionKind,
     authorityOwnerId: state.authorityOwner.authorityOwnerId,
     authorityOwnerLabel: state.authorityOwner.authorityOwnerLabel,
     actingPrincipalId: state.agentPrincipalId,
@@ -716,7 +773,14 @@ function emitSessionAuditEvent(
     expectedArtifactKinds: state.taskContract.expectedArtifactKinds,
     forbiddenInformationFlows: state.taskContract.forbiddenInformationFlows,
     lineageFlags: lineageFlags(state),
-    modelFeatures: buildModelFeatures(state, params.modelFeatures),
+    propertyTags: uniqueStrings([
+      ...(params.propertyTags ?? []),
+      attributionPropertyTag(attributionKind),
+    ]),
+    modelFeatures: buildModelFeatures(state, {
+      attributionKind,
+      ...params.modelFeatures,
+    }),
   });
   state.lastAuditEventId = eventId;
   enqueueAuditEvent(api, pluginCfg, payload);
@@ -1108,6 +1172,7 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "delegated_run_started",
         subjectKind: "agent",
         triggerKind,
+        attributionKind: deriveAttributionKind(state),
         channelId: ctx.channelId,
         propertyTags: ["authority_constrained_action_execution", "stateful_task_contract"],
         note: `Preparing prompt with trigger=${ctx.trigger ?? "unknown"}.`,
@@ -1145,6 +1210,10 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
           eventKind: "stateful_flow_blocked",
           subjectKind: "agent",
           triggerKind: state.lastTriggerKind || "agent_delegated",
+          attributionKind: deriveAttributionKind(state, {
+            sinkKind: decision.sinkKind,
+            eventKind: "stateful_flow_blocked",
+          }),
           runId: event.runId,
           toolName: event.toolName,
           toolCallId: event.toolCallId,
@@ -1172,29 +1241,40 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "agent_tool_call",
         subjectKind: "agent",
         triggerKind: state.lastTriggerKind || "agent_delegated",
+        attributionKind: deriveAttributionKind(state, {
+          sinkKind:
+            toolCategory(event.toolName) === "outbound"
+              ? "outbound"
+              : toolCategory(event.toolName) === "mutation"
+                ? "mutation"
+                : toolCategory(event.toolName) === "cross_agent"
+                  ? "cross_agent"
+                  : undefined,
+          eventKind: "agent_tool_call",
+        }),
         runId: event.runId,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         propertyTags: [
           "authority_constrained_action_execution",
           ...(memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation"].includes(toolCategory(event.toolName))
+          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
             ? ["memory_lineage_observed"]
             : []),
         ],
         lineageSourceEventIds:
           memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation"].includes(toolCategory(event.toolName))
+          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
             ? memoryLineageSources(state).eventIds
             : undefined,
         lineageSourceQueries:
           memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation"].includes(toolCategory(event.toolName))
+          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
             ? memoryLineageSources(state).queries
             : undefined,
         lineageSourcePaths:
           memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation"].includes(toolCategory(event.toolName))
+          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
             ? memoryLineageSources(state).paths
             : undefined,
         sinkKind:
@@ -1202,16 +1282,23 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
             ? "outbound"
             : toolCategory(event.toolName) === "mutation"
               ? "mutation"
-              : undefined,
+              : toolCategory(event.toolName) === "cross_agent"
+                ? "cross_agent"
+                : undefined,
         note: "Tool call attributed to delegated agent principal.",
       });
       if (
         memoryLineageSources(state).eventIds.length > 0 &&
-        ["outbound", "mutation"].includes(toolCategory(event.toolName))
+        ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
       ) {
         recordMemorySink(state, {
           eventId: state.lastAuditEventId!,
-          sinkKind: toolCategory(event.toolName) === "outbound" ? "outbound" : "mutation",
+          sinkKind:
+            toolCategory(event.toolName) === "outbound"
+              ? "outbound"
+              : toolCategory(event.toolName) === "cross_agent"
+                ? "cross_agent"
+                : "mutation",
           toolName: event.toolName,
           timestamp: Date.now(),
         });
@@ -1239,6 +1326,8 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "tool_result_observed",
         subjectKind: "agent",
         triggerKind: "tool_derived",
+        attributionKind:
+          toolCategory(event.toolName) === "memory" ? "memory_replay" : "tool_derived",
         runId: event.runId,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
@@ -1272,6 +1361,10 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "tool_result_persisted",
         subjectKind: "agent",
         triggerKind: "tool_derived",
+        attributionKind: deriveAttributionKind(state, {
+          sinkKind: "persistence",
+          eventKind: "tool_result_persisted",
+        }),
         toolName: event.toolName ?? ctx.toolName,
         toolCallId: event.toolCallId ?? ctx.toolCallId,
         propertyTags: [
@@ -1334,6 +1427,10 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
           eventKind: "message_persist_observed",
           subjectKind: "agent",
           triggerKind: state.lastTriggerKind,
+          attributionKind: deriveAttributionKind(state, {
+            sinkKind: "persistence",
+            eventKind: "message_persist_observed",
+          }),
           propertyTags: ["memory_lineage_observed", "stateful_task_contract"],
           lineageSourceEventIds: memoryLineageSources(state).eventIds,
           lineageSourceQueries: memoryLineageSources(state).queries,
@@ -1352,6 +1449,10 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "message_persist_blocked",
         subjectKind: "agent",
         triggerKind: state.lastTriggerKind,
+        attributionKind: deriveAttributionKind(state, {
+          sinkKind: "persistence",
+          eventKind: "message_persist_blocked",
+        }),
         propertyTags: ["no_unauthorized_state_persistence", "stateful_task_contract"],
         lineageSourceEventIds: memoryLineageSources(state).eventIds,
         lineageSourceQueries: memoryLineageSources(state).queries,
@@ -1393,6 +1494,7 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
           eventKind: "cross_agent_handoff_blocked",
           subjectKind: "agent",
           triggerKind: "handoff_delegated",
+          attributionKind: "cross_agent_derived",
           childSessionKey: event.childSessionKey,
           propertyTags: ["authority_constrained_action_execution", "stateful_task_contract"],
           lineageSourceEventIds: memoryLineageSources(parentState).eventIds,
@@ -1436,6 +1538,7 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "subagent_handoff_declared",
         subjectKind: "agent",
         triggerKind: "handoff_delegated",
+        attributionKind: "cross_agent_derived",
         childSessionKey: event.childSessionKey,
         parentSessionKey: parentState.sessionKey,
         parentDelegationId: parentState.delegationId,
@@ -1508,6 +1611,7 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
         eventKind: "subagent_handoff_started",
         subjectKind: "agent",
         triggerKind: "handoff_delegated",
+        attributionKind: "cross_agent_derived",
         childSessionKey: event.childSessionKey,
         parentSessionKey: pending?.parentSessionKey,
         parentDelegationId: pending?.parentDelegationId,

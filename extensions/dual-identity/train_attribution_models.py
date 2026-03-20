@@ -142,11 +142,13 @@ def evaluate_logits(logits: torch.Tensor, y_tensor: torch.Tensor, idx_tensor: to
     pred = logits[idx_tensor].argmax(dim=1).cpu().numpy()
     gold = y_tensor[idx_tensor].cpu().numpy()
     names = list(label_encoder.classes_)
+    label_ids = list(range(len(names)))
     return {
         "accuracy": float(accuracy_score(gold, pred)),
         "report": classification_report(
             gold,
             pred,
+            labels=label_ids,
             output_dict=True,
             zero_division=0,
             target_names=names,
