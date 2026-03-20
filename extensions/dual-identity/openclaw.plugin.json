@@ -1,0 +1,41 @@
+{
+  "id": "dual-identity",
+  "name": "Dual Identity",
+  "description": "Distinguishes human authority owners from delegated agent principals and records trigger provenance across sessions, tools, and subagents.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "auditDir": {
+        "type": "string"
+      },
+      "injectSystemContext": {
+        "type": "boolean"
+      },
+      "trackSubagents": {
+        "type": "boolean"
+      },
+      "includeToolDerivedEvents": {
+        "type": "boolean"
+      }
+    }
+  },
+  "uiHints": {
+    "auditDir": {
+      "label": "Audit Directory",
+      "help": "Optional directory for dual-identity JSONL audit logs. Defaults to ~/.openclaw/plugins/dual-identity."
+    },
+    "injectSystemContext": {
+      "label": "Inject System Context",
+      "help": "Prepend a dual-identity security context to each delegated run."
+    },
+    "trackSubagents": {
+      "label": "Track Subagents",
+      "help": "Propagate authority-owner lineage into subagent and handoff sessions."
+    },
+    "includeToolDerivedEvents": {
+      "label": "Include Tool-Derived Events",
+      "help": "Record tool-result observation and persistence events in the dual-identity audit log."
+    }
+  }
+}

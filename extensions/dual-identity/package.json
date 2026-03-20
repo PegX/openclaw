@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/dual-identity",
+  "version": "2026.3.20",
+  "private": true,
+  "description": "OpenClaw dual-identity plugin for distinguishing human authority owners from delegated agent principals.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
