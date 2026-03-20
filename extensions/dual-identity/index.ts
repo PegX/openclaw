@@ -128,6 +128,17 @@ type SessionIdentityState = {
   lastTriggerKind: TriggerKind;
   taskContract: TaskContract;
   memoryLineage: MemoryLineageState;
+  pendingToolCalls: Map<
+    string,
+    {
+      sinkKind?: "outbound" | "mutation" | "persistence" | "cross_agent";
+      attributionKind: TriggerKind;
+      lineageSourceEventIds?: string[];
+      lineageSourceQueries?: string[];
+      lineageSourcePaths?: string[];
+      toolName?: string;
+    }
+  >;
   lastAuditEventId?: string;
   eventCounter: number;
   createdAt: number;
@@ -493,6 +504,14 @@ function cloneMemoryLineage(source?: MemoryLineageState): MemoryLineageState {
   };
 }
 
+function clonePendingToolCalls(
+  source?: SessionIdentityState["pendingToolCalls"],
+): SessionIdentityState["pendingToolCalls"] {
+  return new Map(
+    Array.from(source?.entries() ?? []).map(([toolCallId, value]) => [toolCallId, { ...value }]),
+  );
+}
+
 function noteSourceKind(lineage: MemoryLineageState, triggerKind: TriggerKind): void {
   if (!lineage.sourceKinds.includes(triggerKind)) {
     lineage.sourceKinds.push(triggerKind);
@@ -631,6 +650,74 @@ function recordMemorySink(
   },
 ): void {
   state.memoryLineage.recentSinks = trimRecentLineage([...state.memoryLineage.recentSinks, sink]);
+}
+
+function toolSinkKind(
+  toolName: string | undefined,
+): "outbound" | "mutation" | "cross_agent" | undefined {
+  const category = toolCategory(toolName);
+  if (category === "outbound" || category === "mutation" || category === "cross_agent") {
+    return category;
+  }
+  return undefined;
+}
+
+function rememberPendingToolCall(
+  state: SessionIdentityState,
+  params: {
+    toolCallId?: string;
+    sinkKind?: "outbound" | "mutation" | "persistence" | "cross_agent";
+    attributionKind: TriggerKind;
+    lineageSourceEventIds?: string[];
+    lineageSourceQueries?: string[];
+    lineageSourcePaths?: string[];
+    toolName?: string;
+  },
+): void {
+  const toolCallId = normalizeText(params.toolCallId);
+  if (!toolCallId) {
+    return;
+  }
+  state.pendingToolCalls.set(toolCallId, {
+    sinkKind: params.sinkKind,
+    attributionKind: params.attributionKind,
+    lineageSourceEventIds: params.lineageSourceEventIds,
+    lineageSourceQueries: params.lineageSourceQueries,
+    lineageSourcePaths: params.lineageSourcePaths,
+    toolName: params.toolName,
+  });
+  if (state.pendingToolCalls.size > 16) {
+    const oldest = state.pendingToolCalls.keys().next().value;
+    if (oldest) {
+      state.pendingToolCalls.delete(oldest);
+    }
+  }
+}
+
+function peekPendingToolCall(
+  state: SessionIdentityState,
+  toolCallId?: string,
+): SessionIdentityState["pendingToolCalls"] extends Map<string, infer T> ? T | undefined : never {
+  const normalizedToolCallId = normalizeText(toolCallId);
+  if (!normalizedToolCallId) {
+    return undefined;
+  }
+  return state.pendingToolCalls.get(normalizedToolCallId);
+}
+
+function consumePendingToolCall(
+  state: SessionIdentityState,
+  toolCallId?: string,
+): SessionIdentityState["pendingToolCalls"] extends Map<string, infer T> ? T | undefined : never {
+  const normalizedToolCallId = normalizeText(toolCallId);
+  if (!normalizedToolCallId) {
+    return undefined;
+  }
+  const pending = peekPendingToolCall(state, normalizedToolCallId);
+  if (pending) {
+    state.pendingToolCalls.delete(normalizedToolCallId);
+  }
+  return pending;
 }
 
 function renderDualIdentityContext(state: SessionIdentityState, triggerKind: TriggerKind): string {
@@ -926,6 +1013,7 @@ function ensureSessionState(params: {
             params.parentSessionKey ? "subagent_inheritance" : "prompt_heuristic",
           ),
         memoryLineage: cloneMemoryLineage(params.memoryLineage),
+        pendingToolCalls: clonePendingToolCalls(existing.pendingToolCalls),
         eventCounter: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -979,6 +1067,7 @@ function ensureSessionState(params: {
         params.parentSessionKey ? "subagent_inheritance" : "prompt_heuristic",
       ),
     memoryLineage: cloneMemoryLineage(params.memoryLineage),
+    pendingToolCalls: new Map(),
     eventCounter: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -1237,68 +1326,46 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
           blockReason: decision.reason,
         };
       }
+      const sinkKind = toolSinkKind(event.toolName);
+      const memorySources = memoryLineageSources(state);
+      const lineageAwareSink =
+        memorySources.eventIds.length > 0 &&
+        ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName));
+      const attributionKind = deriveAttributionKind(state, {
+        sinkKind,
+        eventKind: "agent_tool_call",
+      });
       emitSessionAuditEvent(api, pluginCfg, state, {
         eventKind: "agent_tool_call",
         subjectKind: "agent",
         triggerKind: state.lastTriggerKind || "agent_delegated",
-        attributionKind: deriveAttributionKind(state, {
-          sinkKind:
-            toolCategory(event.toolName) === "outbound"
-              ? "outbound"
-              : toolCategory(event.toolName) === "mutation"
-                ? "mutation"
-                : toolCategory(event.toolName) === "cross_agent"
-                  ? "cross_agent"
-                  : undefined,
-          eventKind: "agent_tool_call",
-        }),
+        attributionKind,
         runId: event.runId,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         propertyTags: [
           "authority_constrained_action_execution",
-          ...(memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
-            ? ["memory_lineage_observed"]
-            : []),
+          ...(lineageAwareSink ? ["memory_lineage_observed"] : []),
         ],
-        lineageSourceEventIds:
-          memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
-            ? memoryLineageSources(state).eventIds
-            : undefined,
-        lineageSourceQueries:
-          memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
-            ? memoryLineageSources(state).queries
-            : undefined,
-        lineageSourcePaths:
-          memoryLineageSources(state).eventIds.length > 0 &&
-          ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
-            ? memoryLineageSources(state).paths
-            : undefined,
-        sinkKind:
-          toolCategory(event.toolName) === "outbound"
-            ? "outbound"
-            : toolCategory(event.toolName) === "mutation"
-              ? "mutation"
-              : toolCategory(event.toolName) === "cross_agent"
-                ? "cross_agent"
-                : undefined,
+        lineageSourceEventIds: lineageAwareSink ? memorySources.eventIds : undefined,
+        lineageSourceQueries: lineageAwareSink ? memorySources.queries : undefined,
+        lineageSourcePaths: lineageAwareSink ? memorySources.paths : undefined,
+        sinkKind,
         note: "Tool call attributed to delegated agent principal.",
       });
-      if (
-        memoryLineageSources(state).eventIds.length > 0 &&
-        ["outbound", "mutation", "cross_agent"].includes(toolCategory(event.toolName))
-      ) {
+      rememberPendingToolCall(state, {
+        toolCallId: event.toolCallId,
+        sinkKind,
+        attributionKind,
+        lineageSourceEventIds: lineageAwareSink ? memorySources.eventIds : undefined,
+        lineageSourceQueries: lineageAwareSink ? memorySources.queries : undefined,
+        lineageSourcePaths: lineageAwareSink ? memorySources.paths : undefined,
+        toolName: event.toolName,
+      });
+      if (lineageAwareSink && sinkKind) {
         recordMemorySink(state, {
           eventId: state.lastAuditEventId!,
-          sinkKind:
-            toolCategory(event.toolName) === "outbound"
-              ? "outbound"
-              : toolCategory(event.toolName) === "cross_agent"
-                ? "cross_agent"
-                : "mutation",
+          sinkKind,
           toolName: event.toolName,
           timestamp: Date.now(),
         });
@@ -1322,16 +1389,25 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
       if (!state) {
         return;
       }
+      const pendingToolCall = peekPendingToolCall(state, event.toolCallId);
       const observedEvent = emitSessionAuditEvent(api, pluginCfg, state, {
         eventKind: "tool_result_observed",
         subjectKind: "agent",
         triggerKind: "tool_derived",
         attributionKind:
-          toolCategory(event.toolName) === "memory" ? "memory_replay" : "tool_derived",
+          pendingToolCall?.attributionKind ??
+          (toolCategory(event.toolName) === "memory" ? "memory_replay" : "tool_derived"),
         runId: event.runId,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
-        propertyTags: toolCategory(event.toolName) === "memory" ? ["no_secret_derived_replay"] : [],
+        propertyTags: uniqueStrings([
+          ...(toolCategory(event.toolName) === "memory" ? ["no_secret_derived_replay"] : []),
+          ...(pendingToolCall?.lineageSourceEventIds?.length ? ["memory_lineage_observed"] : []),
+        ]),
+        lineageSourceEventIds: pendingToolCall?.lineageSourceEventIds,
+        lineageSourceQueries: pendingToolCall?.lineageSourceQueries,
+        lineageSourcePaths: pendingToolCall?.lineageSourcePaths,
+        sinkKind: pendingToolCall?.sinkKind,
         note: event.error
           ? `Tool result observed with error: ${event.error}`
           : `Tool result observed (${event.durationMs ?? 0} ms).`,
@@ -1357,40 +1433,50 @@ export default function registerDualIdentity(api: OpenClawPluginApi) {
       if (!state) {
         return;
       }
+      const pendingToolCall = consumePendingToolCall(state, event.toolCallId ?? ctx.toolCallId);
+      const sinkKind = pendingToolCall?.sinkKind ?? "persistence";
       const persistedEvent = emitSessionAuditEvent(api, pluginCfg, state, {
         eventKind: "tool_result_persisted",
         subjectKind: "agent",
         triggerKind: "tool_derived",
-        attributionKind: deriveAttributionKind(state, {
-          sinkKind: "persistence",
-          eventKind: "tool_result_persisted",
-        }),
+        attributionKind:
+          pendingToolCall?.attributionKind ??
+          deriveAttributionKind(state, {
+            sinkKind,
+            eventKind: "tool_result_persisted",
+          }),
         toolName: event.toolName ?? ctx.toolName,
         toolCallId: event.toolCallId ?? ctx.toolCallId,
         propertyTags: [
           "no_unauthorized_state_persistence",
-          ...(memoryLineageSources(state).eventIds.length > 0 ? ["memory_lineage_observed"] : []),
+          ...((pendingToolCall?.lineageSourceEventIds?.length ??
+            memoryLineageSources(state).eventIds.length) > 0
+            ? ["memory_lineage_observed"]
+            : []),
         ],
         lineageSourceEventIds:
-          memoryLineageSources(state).eventIds.length > 0
+          pendingToolCall?.lineageSourceEventIds ??
+          (memoryLineageSources(state).eventIds.length > 0
             ? memoryLineageSources(state).eventIds
-            : undefined,
+            : undefined),
         lineageSourceQueries:
-          memoryLineageSources(state).eventIds.length > 0
+          pendingToolCall?.lineageSourceQueries ??
+          (memoryLineageSources(state).eventIds.length > 0
             ? memoryLineageSources(state).queries
-            : undefined,
+            : undefined),
         lineageSourcePaths:
-          memoryLineageSources(state).eventIds.length > 0
+          pendingToolCall?.lineageSourcePaths ??
+          (memoryLineageSources(state).eventIds.length > 0
             ? memoryLineageSources(state).paths
-            : undefined,
-        sinkKind: "persistence",
+            : undefined),
+        sinkKind,
         note: event.isSynthetic
           ? "Synthetic tool result persisted."
           : "Tool result persisted to transcript.",
       });
       recordMemorySink(state, {
         eventId: persistedEvent.eventId,
-        sinkKind: "persistence",
+        sinkKind: sinkKind === "cross_agent" ? "cross_agent" : "persistence",
         toolName: event.toolName ?? ctx.toolName,
         timestamp: Date.now(),
       });

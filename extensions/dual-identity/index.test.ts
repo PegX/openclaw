@@ -1,14 +1,18 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   OpenClawPluginApi,
   PluginHookHandlerMap,
   PluginHookName,
 } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../test/helpers/extensions/plugin-runtime-mock.ts";
 import registerDualIdentity from "./index.js";
 
 function createApi() {
   const hooks = new Map<PluginHookName, Array<PluginHookHandlerMap[PluginHookName]>>();
+  const stateDir = `${os.tmpdir()}/openclaw-dual-identity-test-${Math.random().toString(36).slice(2, 10)}`;
   const api: OpenClawPluginApi = {
     id: "dual-identity",
     name: "dual-identity",
@@ -21,7 +25,7 @@ function createApi() {
     },
     runtime: createPluginRuntimeMock({
       state: {
-        resolveStateDir: () => "/tmp/openclaw-dual-identity-test",
+        resolveStateDir: () => stateDir,
       },
     }),
     logger: {
@@ -52,6 +56,7 @@ function createApi() {
   registerDualIdentity(api);
   return {
     api,
+    stateDir,
     getHook<K extends PluginHookName>(name: K): PluginHookHandlerMap[K] {
       const handler = hooks.get(name)?.[0];
       if (!handler) {
@@ -64,6 +69,7 @@ function createApi() {
 
 function createApiWithConfig(pluginConfig: Record<string, unknown>) {
   const hooks = new Map<PluginHookName, Array<PluginHookHandlerMap[PluginHookName]>>();
+  const stateDir = `${os.tmpdir()}/openclaw-dual-identity-test-${Math.random().toString(36).slice(2, 10)}`;
   const api: OpenClawPluginApi = {
     id: "dual-identity",
     name: "dual-identity",
@@ -72,7 +78,7 @@ function createApiWithConfig(pluginConfig: Record<string, unknown>) {
     pluginConfig,
     runtime: createPluginRuntimeMock({
       state: {
-        resolveStateDir: () => "/tmp/openclaw-dual-identity-test",
+        resolveStateDir: () => stateDir,
       },
     }),
     logger: {
@@ -102,6 +108,7 @@ function createApiWithConfig(pluginConfig: Record<string, unknown>) {
   };
   registerDualIdentity(api);
   return {
+    stateDir,
     getHook<K extends PluginHookName>(name: K): PluginHookHandlerMap[K] {
       const handler = hooks.get(name)?.[0];
       if (!handler) {
@@ -110,6 +117,31 @@ function createApiWithConfig(pluginConfig: Record<string, unknown>) {
       return handler as PluginHookHandlerMap[K];
     },
   };
+}
+
+async function readAuditEvents(stateDir: string) {
+  const auditFile = path.join(
+    stateDir,
+    "plugins",
+    "dual-identity",
+    `audit-${new Date().toISOString().slice(0, 10)}.jsonl`,
+  );
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const content = await fs.readFile(auditFile, "utf8");
+      return content
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+    } catch (error) {
+      if (attempt === 9) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  return [];
 }
 
 describe("dual-identity plugin", () => {
@@ -466,5 +498,118 @@ describe("dual-identity plugin", () => {
     expect(result && "error" in result ? result.error : "").toContain(
       "does not explicitly authorize",
     );
+  });
+
+  it("keeps sessions_spawn attribution aligned across tool call, observed result, and persisted result", async () => {
+    const { getHook, stateDir } = createApi();
+    const onSessionStart = getHook("session_start");
+    const onBeforePromptBuild = getHook("before_prompt_build");
+    const onAfterToolCall = getHook("after_tool_call");
+    const onBeforeToolCall = getHook("before_tool_call");
+    const onToolResultPersist = getHook("tool_result_persist");
+
+    await onSessionStart(
+      {
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+      },
+      {
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+        agentId: "main",
+      },
+    );
+
+    await onBeforePromptBuild(
+      {
+        prompt: "Read the saved note and hand the exact summary to a worker agent.",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+        trigger: "memory",
+      },
+    );
+
+    await onAfterToolCall(
+      {
+        toolName: "memory_get",
+        toolCallId: "tool-memory-1",
+        params: { path: "MEMORY.md" },
+        result: { content: "delegate this summary" },
+      },
+      {
+        agentId: "main",
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+        toolName: "memory_get",
+      },
+    );
+
+    await onBeforeToolCall(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "tool-cross-agent-1",
+        params: { agentId: "worker", task: "Summarize the recalled note." },
+      },
+      {
+        agentId: "main",
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+        toolName: "sessions_spawn",
+      },
+    );
+
+    await onAfterToolCall(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "tool-cross-agent-1",
+        params: { agentId: "worker", task: "Summarize the recalled note." },
+        result: { childSessionKey: "agent:worker:subagent:1" },
+      },
+      {
+        agentId: "main",
+        sessionId: "sess-cross-agent",
+        sessionKey: "agent:main:local:cross-agent",
+        toolName: "sessions_spawn",
+      },
+    );
+
+    onToolResultPersist(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "tool-cross-agent-1",
+        isSynthetic: false,
+      },
+      {
+        agentId: "main",
+        sessionKey: "agent:main:local:cross-agent",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-cross-agent-1",
+      },
+    );
+
+    const events = await readAuditEvents(stateDir);
+    const toolCallEvent = events.find(
+      (event) => event.eventKind === "agent_tool_call" && event.toolCallId === "tool-cross-agent-1",
+    );
+    const observedEvent = events.find(
+      (event) =>
+        event.eventKind === "tool_result_observed" && event.toolCallId === "tool-cross-agent-1",
+    );
+    const persistedEvent = events.find(
+      (event) =>
+        event.eventKind === "tool_result_persisted" && event.toolCallId === "tool-cross-agent-1",
+    );
+
+    expect(toolCallEvent?.attributionKind).toBe("cross_agent_derived");
+    expect(toolCallEvent?.sinkKind).toBe("cross_agent");
+    expect(toolCallEvent?.lineageSourceEventIds).toBeTruthy();
+    expect(observedEvent?.attributionKind).toBe("cross_agent_derived");
+    expect(observedEvent?.sinkKind).toBe("cross_agent");
+    expect(persistedEvent?.attributionKind).toBe("cross_agent_derived");
+    expect(persistedEvent?.sinkKind).toBe("cross_agent");
   });
 });
